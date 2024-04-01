@@ -4,7 +4,11 @@ import torch.optim as optim
 from torch.utils.data import DataLoader, Dataset, random_split
 from torchvision import transforms
 from PIL import Image
+from torchvision.transforms.functional import to_pil_image
+from skimage.metrics import peak_signal_noise_ratio, structural_similarity
+import matplotlib.pyplot as plt
 import torch.nn.functional as F
+import setproctitle
 import numpy as np
 import os
 
@@ -134,8 +138,9 @@ input_image_paths = [os.path.join(input_image_folder, filename) for filename in 
 target_image_paths = [os.path.join(target_image_folder, filename) for filename in os.listdir(target_image_folder) if filename.endswith('.bmp') or filename.endswith('.png')]
 
 batch_size = 32
-learning_rate = 0.0001 
-num_epochs = 10
+learning_rate = 0.001 
+num_epochs = 100
+weight_decay=0.01
 
 # # Data preprocessing
 transform = transforms.Compose([
@@ -148,6 +153,8 @@ dataset = ImageToImageDataset(input_image_paths, target_image_paths, transform=t
 # Split dataset
 train_size = int(0.8 * len(dataset))
 test_size = len(dataset) - train_size
+
+torch.manual_seed(45)
 train_dataset, test_dataset = random_split(dataset, [train_size, test_size])
 
 # Load train and test dataloaders
@@ -155,33 +162,93 @@ train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True
 test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
 # Initialize model, loss function, and optimizer
-model = UNet()
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# torch.cuda.set_device(0)
+
+# device = torch.device("cuda:3")
+model = UNet().to(device)
+
+new_title = "CV_project"
+setproctitle.setproctitle(new_title)
+
+
 criterion = nn.MSELoss()
-optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+optimizer = optim.Adam(model.parameters(), lr=learning_rate,weight_decay=weight_decay)
+# loss_list = []
+
 
 # Train model
 for epoch in range(num_epochs):
     model.train()
+    epoch_loss=0.0
     for batch_idx, (inputs, targets) in enumerate(train_dataloader):
-        outputs = model(inputs)
-
+        inputs, targets = inputs.to(device), targets.to(device)
+        outputs = model(inputs.to(device))
+        
         optimizer.zero_grad()
         loss = criterion(outputs, targets)
+        epoch_loss+=loss
         loss.backward()
         optimizer.step()
 
         if batch_idx % 100 == 0:
             print(f"Epoch [{epoch + 1}/{num_epochs}], Batch [{batch_idx + 1}/{len(train_dataloader)}], Loss: {loss.item()}")
+    # if epoch % 10 == 0:
+    #     torch.save(model.state_dict(), f"temp_unet_model_reflect_b={batch_size},lr={learning_rate},epoch={epoch},w_decay={weight_decay}.pth")
+    # epoch_loss /= len(train_dataloader)
+    # loss_list.append(epoch_loss)            
+torch.save(model.state_dict(), f"unet_model_reflect_b={batch_size},lr={learning_rate},epoch={epoch},w_decay={weight_decay}.pth")
+
+# plt.plot(loss_list)
+# plt.xlabel("epoch")
+# plt.ylabel("loss")
+# plt.savefig(f"epoch_loss_curve_b={batch_size},lr={learning_rate},epoch={epoch}.png")    #w_decay={weight_decay}        
+
+mse_values = []
+psnr_values = []
+ssim_values = []
+
 
 # Test model
 model.eval()
-test_loss = 0.0
 with torch.no_grad():
-    for inputs, targets in test_dataloader:
-        outputs = model(inputs)
-        test_loss += criterion(outputs, targets)
+    for i, (inputs, targets) in enumerate(test_dataloader):
+        outputs = model(inputs.to(device))
+        
+        # Calculate MSE
+        squared_diff = np.square(outputs.cpu().numpy() - targets.cpu().numpy())
+        mse=squared_diff
+        mse = np.mean(squared_diff)
+        mse_values.append(mse)
 
-print(f"Test Loss: {test_loss / len(test_dataloader)}")
+        # Calculate PSNR
+        psnr = peak_signal_noise_ratio(targets.permute(0, 2, 3, 1).cpu().numpy(),
+                                        outputs.permute(0, 2, 3, 1).cpu().numpy())
+        psnr_values.append(psnr)
 
-# Save model
-torch.save(model.state_dict(), "unet_model_reflect.pth")
+        # # Calculate SSIM
+        ssim = structural_similarity(targets[0].permute(1,2,0).cpu().numpy(),
+                                      outputs[0].permute(1,2,0).cpu().numpy(),channel_axis=2,data_range=1.0)
+        ssim_values.append(ssim)
+         # Print test progress
+        print(f"Image {i+1}/{len(test_dataloader)} - MSE: {mse:.4f}, PSNR: {psnr:.2f}, SSIM:{ssim:.2f}")
+
+# Convert lists to numpy arrays for easy calculation of mean and std
+mse_values = np.array(mse_values)
+psnr_values = np.array(psnr_values)
+ssim_values = np.array(ssim_values)
+
+# Calculate mean and standard deviation
+mse_mean = np.mean(mse_values)
+psnr_mean = np.mean(psnr_values)
+ssim_mean = np.mean(ssim_values)
+mse_std = np.std(mse_values)
+psnr_std = np.std(psnr_values)
+ssim_std = np.std(ssim_values)
+
+print(f"MSE Mean: {mse_mean}, MSE Std: {mse_std}")
+print(f"PSNR Mean: {psnr_mean}, PSNR Std: {psnr_std}")
+print(f"SSIM Mean: {ssim_mean}, SSIM Std: {ssim_std}")
+
+
+
