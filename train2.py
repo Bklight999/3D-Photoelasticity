@@ -6,6 +6,7 @@ from torchvision import transforms
 from PIL import Image
 from torchvision.transforms.functional import to_pil_image
 from skimage.metrics import peak_signal_noise_ratio, structural_similarity
+from torch.optim.lr_scheduler import StepLR
 import matplotlib.pyplot as plt
 import torch.nn.functional as F
 import setproctitle
@@ -138,9 +139,9 @@ input_image_paths = [os.path.join(input_image_folder, filename) for filename in 
 target_image_paths = [os.path.join(target_image_folder, filename) for filename in os.listdir(target_image_folder) if filename.endswith('.bmp') or filename.endswith('.png')]
 
 batch_size = 32
-learning_rate = 0.001 
+learning_rate = 0.1 
 num_epochs = 100
-weight_decay=0.01
+weight_decay=0.001
 
 # # Data preprocessing
 transform = transforms.Compose([
@@ -174,6 +175,9 @@ setproctitle.setproctitle(new_title)
 
 criterion = nn.MSELoss()
 optimizer = optim.Adam(model.parameters(), lr=learning_rate,weight_decay=weight_decay)
+
+scheduler = StepLR(optimizer, step_size=10, gamma=0.1)
+
 # loss_list = []
 
 
@@ -193,11 +197,13 @@ for epoch in range(num_epochs):
 
         if batch_idx % 100 == 0:
             print(f"Epoch [{epoch + 1}/{num_epochs}], Batch [{batch_idx + 1}/{len(train_dataloader)}], Loss: {loss.item()}")
+    scheduler.step()
     # if epoch % 10 == 0:
     #     torch.save(model.state_dict(), f"temp_unet_model_reflect_b={batch_size},lr={learning_rate},epoch={epoch},w_decay={weight_decay}.pth")
     # epoch_loss /= len(train_dataloader)
-    # loss_list.append(epoch_loss)            
-torch.save(model.state_dict(), f"unet_model_reflect_b={batch_size},lr={learning_rate},epoch={epoch},w_decay={weight_decay}.pth")
+    # loss_list.append(epoch_loss)  
+              
+torch.save(model.state_dict(), f"unet_model_reflect_b={batch_size},lr={learning_rate},epoch={num_epochs},w_decay={weight_decay}.pth")
 
 # plt.plot(loss_list)
 # plt.xlabel("epoch")
